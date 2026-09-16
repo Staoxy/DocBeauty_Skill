@@ -113,275 +113,279 @@ def process_document(input_path: str, cfg: dict) -> tuple:
 
     # ---- 1. 加载 + 护栏基线快照（任何修改之前） ----
     workdir = tempfile.mkdtemp(prefix="docbeauty_", dir=C.temp_dir_root())
-    work_file = os.path.join(workdir, "work.docx")
-    shutil.copy2(input_path, work_file)
-    doc = Document(work_file)
-
-    before_guard = guard.snapshot(doc)
-    before_analysis = analyzer.analyze(doc)
-    if before_analysis["paragraph_count"] == 0 and before_analysis["table_count"] == 0:
-        raise ConfigError(C.EMPTY_DOCUMENT, "document has no paragraphs and no tables")
-
-    # ---- 2/3. 结构检测 + 列表登记 ----
-    zones = structure.detect(doc, before_analysis)
-    list_count = lists.detect_lists(doc, zones)
-    before_analysis["list_paragraph_count"] = list_count
-    if zones.zones.get("toc_existing_manual"):
-        before_analysis["existing_manual_toc"] = True
-
-    # ---- 4. 配置合并 ----
-    if cfg["document_type"] == "auto":
-        dtype = analyzer.detect_document_type(doc, before_analysis)
-    else:
-        dtype = {"value": cfg["document_type"], "confidence": 1.0, "evidence": []}
-    effective = build_effective(cfg, dtype["value"])
-
-    ops = cfg["operations"] if isinstance(cfg["operations"], list) else C.AUTO_OPERATIONS
-    sections["config"] = {
-        "style_resolved": effective["_style_resolved"],
-        "document_type": dtype,
-        "content_protection": cfg["content_protection"],
-        "operations_requested": cfg["operations"],
-        "operations_planned": [C.OPERATION_CATALOG.get(o, o) for o in ops],
-        "overrides_applied": cfg.get("overrides") or {},
-        "options": cfg["options"],
-    }
-
-    # ---- task=diagnose：只诊断不修改（§3.4），不产出 docx ----
-    if cfg.get("task") == "diagnose":
-        diagnosis = diagnose_mod.diagnose(doc, before_analysis, zones)
-        sections["diagnosis"] = diagnosis
-        sections["analysis"] = before_analysis
-        sections["zones"] = zones.to_report()
-        sections["config"].pop("operations_planned", None)
-        sections["config"]["operations_executed"] = ["diagnosis_done"]
-        rep = finalize("success", C.EXIT_SUCCESS)
-        write_report(rep, report_path)
-        return rep, C.EXIT_SUCCESS, None
-
-    # ---- dry-run：不修改任何东西（§21.2） ----
-    if cfg.get("_dry_run"):
-        sections["zones"] = zones.to_report()
-        sections["analysis"] = before_analysis
-        sections["operations_detail"] = [{
-            "op": "dry_run_plan",
-            "planned_operations": [C.OPERATION_CATALOG.get(o, o) for o in ops],
-            "heading_promote_plan": {
-                "accepted": [{"paragraph": i, "level": lv,
-                              "text": analyzer.para_text(doc.paragraphs[i]._p).strip()[:40]}
-                             for i, lv in sorted(zones.headings.items())],
-                "candidates_not_modified": zones.candidates,
-            },
-            "toc_will_insert": ("toc" in ops
-                                and not before_analysis["existing_toc_field"]
-                                and len(zones.headings) >= 3),
-        }]
-        rep = finalize("dry_run", C.EXIT_SUCCESS)
-        write_report(rep, report_path)
-        return rep, C.EXIT_SUCCESS, None
-
-    # ---- 5-15. 执行操作 ----
-    accounting = {}
-    op_detail, executed, skipped, failed, warnings = [], [], [], [], []
-
-    def run_op(op, fn):
-        if op not in ops:
-            return None
-        mapped = C.OPERATION_CATALOG.get(op, op)
-        try:
-            detail = fn() or {}
-            warns = detail.pop("warnings", None) if isinstance(detail, dict) else None
-            if warns:
-                warnings.extend(warns)
-            executed.append(mapped)
-            op_detail.append({"op": mapped, "status": "done", "changed": detail})
-            return detail
-        except OpSkip as s:
-            skipped.append({"op": mapped, "reason": s.reason})
-            op_detail.append({"op": mapped, "status": "skipped", "reason": s.reason})
-            return None
-        except Exception as e:
-            LOG(f"operation {op} failed: {e}\n{traceback.format_exc()}")
-            failed.append(f"OP_FAILED:{op}: {e}")
-            op_detail.append({"op": mapped, "status": "failed", "error": str(e)})
-            return None
-
-    toc_status = None
-
-    def _normalize_font():
-        formatter.update_style_definitions(doc, effective)  # 双轨制轨道①
-        return formatter.normalize_fonts(doc, zones, effective, cfg["options"])
-
-    def _format_headings():
-        d = headings.apply_style_definitions(doc, effective, cfg["options"], before_analysis)
-        d.update(headings.apply_to_paragraphs(doc, zones, effective, cfg["options"]))
-        return d
-
-    def _page_number():
-        d = layout.add_page_numbers(doc, effective, cfg["options"], before_analysis, zones)
-        if d.get("warnings"):
-            warnings.extend(d.pop("warnings"))
-        if d.get("skipped_existing"):
-            raise OpSkip("existing PAGE fields kept (page_number_skip_existing=true)")
-        return d
-
-    def _toc():
-        nonlocal toc_status
-        d = toc_mod.add_toc(doc, zones, effective, cfg["options"], before_analysis, accounting)
-        toc_status = d["status"]
-        if d.get("warnings"):
-            warnings.extend(d.pop("warnings"))
-        if d["status"] == "skipped":
-            raise OpSkip(d.get("reason") or "toc conditions not met")
-        return d
-
-    run_op("page_setup", lambda: layout.setup_page(doc, effective))
-    run_op("detect_headings", lambda: {
-        "headings_detected": len(zones.headings),
-        "numbering_template": zones.numbering_template,
-        "candidates": len(zones.candidates)})
-    run_op("format_headings", _format_headings)
-    run_op("normalize_font", _normalize_font)
-    run_op("normalize_paragraph", lambda: formatter.normalize_paragraphs(
-        doc, zones, effective, cfg["options"]))
-    run_op("punctuation_normalize",
-           lambda: punctuation.apply(doc, accounting))  # §10.5 门控已在 config 校验
-    run_op("normalize_lists", lambda: lists.apply(doc, zones, effective))
-    run_op("format_captions", lambda: formatter.format_captions(doc, zones, effective))
-    run_op("format_tables", lambda: tables.format_tables(
-        doc, effective, cfg["options"], before_analysis))
-    run_op("format_images", lambda: images.format_images(doc, effective, cfg["options"]))
-    run_op("page_number", _page_number)
-    run_op("toc", _toc)
-    run_op("cleanup_blank_paragraphs",
-           lambda: cleanup.run(doc, zones, cfg["options"], accounting))
-
-    sections["config"]["operations_executed"] = executed
-    sections["config"]["operations_skipped"] = skipped
-    sections["config"]["operations_failed"] = failed
-
-    # ---- 16. 保存 -> 检查 -> 护栏 -> 原子落盘 ----
-    tmp_out = docx_path + ".tmp"
-    os.makedirs(os.path.dirname(docx_path) or ".", exist_ok=True)
-    doc.save(tmp_out)
-
     try:
-        from docx import Document as Doc2
-        out_doc = Doc2(tmp_out)  # Q01：输出必须能重新打开
-    except Exception as e:
-        os.remove(tmp_out)
-        sections["errors"] = [f"Q01: output cannot be re-opened: {e}"]
-        rep = finalize("error", C.EXIT_ERROR)
-        write_report(rep, report_path)
-        return rep, C.EXIT_ERROR, None
+        work_file = os.path.join(workdir, "work.docx")
+        shutil.copy2(input_path, work_file)
+        doc = Document(work_file)
 
-    after_guard = guard.snapshot(out_doc)
-    after_analysis = analyzer.analyze(out_doc)
+        before_guard = guard.snapshot(doc)
+        before_analysis = analyzer.analyze(doc)
+        if before_analysis["paragraph_count"] == 0 and before_analysis["table_count"] == 0:
+            raise ConfigError(C.EMPTY_DOCUMENT, "document has no paragraphs and no tables")
 
-    guard_result = guard.verify(before_guard, after_guard, accounting)
-    sections["content_guard"] = {
-        "enabled": cfg["content_protection"],
-        "fingerprint_before": before_guard["para_fingerprint"],
-        "fingerprint_after": after_guard["para_fingerprint"],
-        "content_changed": guard_result["content_changed"] if cfg["content_protection"]
-        else bool(accounting.get("punctuation_changes")),
-        "excluded_generated": {
-            "paragraphs": accounting.get("toc_paragraphs_added", 0),
-            "preview": accounting.get("excluded_generated_texts", [])[:5],
-        },
-        "punctuation_changes": accounting.get("punctuation_changes", []),
-        "integrity": guard_result["integrity"],
-        "diffs": guard_result["diffs"],
-    }
+        # ---- 2/3. 结构检测 + 列表登记 ----
+        zones = structure.detect(doc, before_analysis)
+        list_count = lists.detect_lists(doc, zones)
+        before_analysis["list_paragraph_count"] = list_count
+        if zones.zones.get("toc_existing_manual"):
+            before_analysis["existing_manual_toc"] = True
 
-    checks = checker.run_checks(out_doc, {
-        "before_analysis": before_analysis,
-        "after_analysis": after_analysis,
-        "accounting": accounting,
-        "effective": effective,
-        "requested": {
-            "toc": "toc" in ops and toc_status == "added",
-            "page_number": "page_number" in ops and not any(
-                s.get("op") == "page_number_added" for s in skipped),
-            "format_headings": "format_headings" in ops,
-        },
-    })
-    checks.insert(0, {"id": "Q01", "status": "pass",
-                      "detail": "output re-opened with python-docx"})
-    sections["quality_checks"] = checks
+        # ---- 4. 配置合并 ----
+        if cfg["document_type"] == "auto":
+            dtype = analyzer.detect_document_type(doc, before_analysis)
+        else:
+            dtype = {"value": cfg["document_type"], "confidence": 1.0, "evidence": []}
+        effective = build_effective(cfg, dtype["value"])
 
-    # 护栏失败 -> 删除临时输出，不产出文件（§17.5）
-    if cfg["content_protection"] and not guard_result["ok"]:
-        os.remove(tmp_out)
-        sections["errors"] = [f"GUARD_FAILED: {m}" for m in guard_result["integrity_failures"]] + [
-            f"content diff: {d}" for d in guard_result["diffs"][:5]]
-        rep = finalize("guard_failed", C.EXIT_GUARD_FAILED)
-        write_report(rep, report_path)
-        return rep, C.EXIT_GUARD_FAILED, None
+        ops = cfg["operations"] if isinstance(cfg["operations"], list) else C.AUTO_OPERATIONS
+        sections["config"] = {
+            "style_resolved": effective["_style_resolved"],
+            "document_type": dtype,
+            "content_protection": cfg["content_protection"],
+            "operations_requested": cfg["operations"],
+            "operations_planned": [C.OPERATION_CATALOG.get(o, o) for o in ops],
+            "overrides_applied": cfg.get("overrides") or {},
+            "options": cfg["options"],
+        }
 
-    # 原子落盘
-    os.replace(tmp_out, docx_path)
-    sections["output"]["written"] = True
-    sections["output"]["size_bytes"] = os.path.getsize(docx_path)
+        # ---- task=diagnose：只诊断不修改（§3.4），不产出 docx ----
+        if cfg.get("task") == "diagnose":
+            diagnosis = diagnose_mod.diagnose(doc, before_analysis, zones)
+            sections["diagnosis"] = diagnosis
+            sections["analysis"] = before_analysis
+            sections["zones"] = zones.to_report()
+            sections["config"].pop("operations_planned", None)
+            sections["config"]["operations_executed"] = ["diagnosis_done"]
+            rep = finalize("success", C.EXIT_SUCCESS)
+            write_report(rep, report_path)
+            return rep, C.EXIT_SUCCESS, None
 
-    # ---- 状态归并 ----
-    error_checks = [c for c in checks if c["status"] == "fail"]
-    for c in error_checks:
-        warnings.append(f"{c['id']}: {c['detail']}")
-    errors = failed[:] + [f"{c['id']}: {c['detail']}" for c in error_checks]
+        # ---- dry-run：不修改任何东西（§21.2） ----
+        if cfg.get("_dry_run"):
+            sections["zones"] = zones.to_report()
+            sections["analysis"] = before_analysis
+            sections["operations_detail"] = [{
+                "op": "dry_run_plan",
+                "planned_operations": [C.OPERATION_CATALOG.get(o, o) for o in ops],
+                "heading_promote_plan": {
+                    "accepted": [{"paragraph": i, "level": lv,
+                                  "text": analyzer.para_text(doc.paragraphs[i]._p).strip()[:40]}
+                                 for i, lv in sorted(zones.headings.items())],
+                    "candidates_not_modified": zones.candidates,
+                },
+                "toc_will_insert": ("toc" in ops
+                                    and not before_analysis["existing_toc_field"]
+                                    and len(zones.headings) >= 3),
+            }]
+            rep = finalize("dry_run", C.EXIT_SUCCESS)
+            write_report(rep, report_path)
+            return rep, C.EXIT_SUCCESS, None
 
-    tc = before_analysis.get("tracked_changes", {})
-    if tc.get("ins") or tc.get("del"):
-        warnings.append(f"文档包含未接受的修订（ins={tc['ins']}, del={tc['del']}），"
-                        "建议先在 Word 中接受修订再排版")
-    if before_analysis.get("comment_count"):
-        warnings.append(f"文档包含 {before_analysis['comment_count']} 条批注，未处理亦未破坏")
-    if before_analysis.get("cjk_char_ratio", 1.0) < 0.3:
-        warnings.append("文档以西文为主，当前模板以中文排版为假设，请确认字体设置")
+        # ---- 5-15. 执行操作 ----
+        accounting = {}
+        op_detail, executed, skipped, failed, warnings = [], [], [], [], []
 
-    sections["zones"] = zones.to_report()
-    sections["analysis"] = before_analysis
-    if "diagnose" in ops:
-        sections["diagnosis"] = diagnose_mod.diagnose(out_doc, after_analysis, zones)
-    sections["statistics"] = {
-        "before": {
-            "paragraphs": before_analysis["paragraph_count"],
-            "tables": before_analysis["table_count"],
-            "inline_images": before_analysis["inline_image_count"],
-            "headings": (before_analysis["heading_counts"].get("h1", 0)
-                         + before_analysis["heading_counts"].get("h2", 0)
-                         + before_analysis["heading_counts"].get("h3", 0)),
-            "hyperlinks": before_analysis["hyperlink_count"],
-        },
-        "after": {
-            "paragraphs": after_analysis["paragraph_count"],
-            "tables": after_analysis["table_count"],
-            "inline_images": after_analysis["inline_image_count"],
-            "headings": (after_analysis["heading_counts"].get("h1", 0)
-                         + after_analysis["heading_counts"].get("h2", 0)
-                         + after_analysis["heading_counts"].get("h3", 0)),
-            "hyperlinks": after_analysis["hyperlink_count"],
-        },
-        "reconciliation": {
-            "blank_deleted": accounting.get("blank_deleted", 0),
-            "toc_added": accounting.get("toc_paragraphs_added", 0),
-            "delta_explained": True,
-        },
-    }
-    sections["operations_detail"] = op_detail
-    boundary = {
-        "floating_images": before_analysis["floating_image_count"],
-        "textboxes": before_analysis["textbox_count"],
-        "equations": before_analysis["omml_equation_count"],
-        "footnotes": before_analysis["footnote_count"],
-    }
-    sections["untouched_boundary"] = (dict(boundary, note="以上对象未处理亦未破坏（§2.5 边界声明）")
-                                      if any(boundary.values())
-                                      else {"note": "未检测到边界对象"})
-    sections["warnings"] = warnings
-    sections["errors"] = errors
+        def run_op(op, fn):
+            if op not in ops:
+                return None
+            mapped = C.OPERATION_CATALOG.get(op, op)
+            try:
+                detail = fn() or {}
+                warns = detail.pop("warnings", None) if isinstance(detail, dict) else None
+                if warns:
+                    warnings.extend(warns)
+                executed.append(mapped)
+                op_detail.append({"op": mapped, "status": "done", "changed": detail})
+                return detail
+            except OpSkip as s:
+                skipped.append({"op": mapped, "reason": s.reason})
+                op_detail.append({"op": mapped, "status": "skipped", "reason": s.reason})
+                return None
+            except Exception as e:
+                LOG(f"operation {op} failed: {e}\n{traceback.format_exc()}")
+                failed.append(f"OP_FAILED:{op}: {e}")
+                op_detail.append({"op": mapped, "status": "failed", "error": str(e)})
+                return None
 
-    shutil.rmtree(workdir, ignore_errors=True)
+        toc_status = None
+
+        def _normalize_font():
+            formatter.update_style_definitions(doc, effective)  # 双轨制轨道①
+            return formatter.normalize_fonts(doc, zones, effective, cfg["options"])
+
+        def _format_headings():
+            d = headings.apply_style_definitions(doc, effective, cfg["options"], before_analysis)
+            d.update(headings.apply_to_paragraphs(doc, zones, effective, cfg["options"]))
+            return d
+
+        def _page_number():
+            d = layout.add_page_numbers(doc, effective, cfg["options"], before_analysis, zones)
+            if d.get("warnings"):
+                warnings.extend(d.pop("warnings"))
+            if d.get("skipped_existing"):
+                raise OpSkip("existing PAGE fields kept (page_number_skip_existing=true)")
+            return d
+
+        def _toc():
+            nonlocal toc_status
+            d = toc_mod.add_toc(doc, zones, effective, cfg["options"], before_analysis, accounting)
+            toc_status = d["status"]
+            if d.get("warnings"):
+                warnings.extend(d.pop("warnings"))
+            if d["status"] == "skipped":
+                raise OpSkip(d.get("reason") or "toc conditions not met")
+            return d
+
+        run_op("page_setup", lambda: layout.setup_page(doc, effective))
+        run_op("detect_headings", lambda: {
+            "headings_detected": len(zones.headings),
+            "numbering_template": zones.numbering_template,
+            "candidates": len(zones.candidates)})
+        run_op("format_headings", _format_headings)
+        run_op("normalize_font", _normalize_font)
+        run_op("normalize_paragraph", lambda: formatter.normalize_paragraphs(
+            doc, zones, effective, cfg["options"]))
+        run_op("punctuation_normalize",
+               lambda: punctuation.apply(doc, accounting))  # §10.5 门控已在 config 校验
+        run_op("normalize_lists", lambda: lists.apply(doc, zones, effective))
+        run_op("format_captions", lambda: formatter.format_captions(doc, zones, effective))
+        run_op("format_tables", lambda: tables.format_tables(
+            doc, effective, cfg["options"], before_analysis))
+        run_op("format_images", lambda: images.format_images(doc, effective, cfg["options"]))
+        run_op("page_number", _page_number)
+        run_op("toc", _toc)
+        run_op("cleanup_blank_paragraphs",
+               lambda: cleanup.run(doc, zones, cfg["options"], accounting))
+
+        sections["config"]["operations_executed"] = executed
+        sections["config"]["operations_skipped"] = skipped
+        sections["config"]["operations_failed"] = failed
+
+        # ---- 16. 保存 -> 检查 -> 护栏 -> 原子落盘 ----
+        tmp_out = docx_path + ".tmp"
+        os.makedirs(os.path.dirname(docx_path) or ".", exist_ok=True)
+        doc.save(tmp_out)
+
+        try:
+            from docx import Document as Doc2
+            out_doc = Doc2(tmp_out)  # Q01：输出必须能重新打开
+        except Exception as e:
+            os.remove(tmp_out)
+            sections["errors"] = [f"Q01: output cannot be re-opened: {e}"]
+            rep = finalize("error", C.EXIT_ERROR)
+            write_report(rep, report_path)
+            return rep, C.EXIT_ERROR, None
+
+        after_guard = guard.snapshot(out_doc)
+        after_analysis = analyzer.analyze(out_doc)
+
+        guard_result = guard.verify(before_guard, after_guard, accounting)
+        sections["content_guard"] = {
+            "enabled": cfg["content_protection"],
+            "fingerprint_before": before_guard["para_fingerprint"],
+            "fingerprint_after": after_guard["para_fingerprint"],
+            "content_changed": guard_result["content_changed"] if cfg["content_protection"]
+            else bool(accounting.get("punctuation_changes")),
+            "excluded_generated": {
+                "paragraphs": accounting.get("toc_paragraphs_added", 0),
+                "preview": accounting.get("excluded_generated_texts", [])[:5],
+            },
+            "punctuation_changes": accounting.get("punctuation_changes", []),
+            "integrity": guard_result["integrity"],
+            "diffs": guard_result["diffs"],
+        }
+
+        checks = checker.run_checks(out_doc, {
+            "before_analysis": before_analysis,
+            "after_analysis": after_analysis,
+            "accounting": accounting,
+            "effective": effective,
+            "requested": {
+                "toc": "toc" in ops and toc_status == "added",
+                "page_number": "page_number" in ops and not any(
+                    s.get("op") == "page_number_added" for s in skipped),
+                "format_headings": "format_headings" in ops,
+            },
+        })
+        checks.insert(0, {"id": "Q01", "status": "pass",
+                          "detail": "output re-opened with python-docx"})
+        sections["quality_checks"] = checks
+
+        # 护栏失败 -> 删除临时输出，不产出文件（§17.5）
+        if cfg["content_protection"] and not guard_result["ok"]:
+            os.remove(tmp_out)
+            sections["errors"] = [f"GUARD_FAILED: {m}" for m in guard_result["integrity_failures"]] + [
+                f"content diff: {d}" for d in guard_result["diffs"][:5]]
+            rep = finalize("guard_failed", C.EXIT_GUARD_FAILED)
+            write_report(rep, report_path)
+            return rep, C.EXIT_GUARD_FAILED, None
+
+        # 原子落盘
+        os.replace(tmp_out, docx_path)
+        sections["output"]["written"] = True
+        sections["output"]["size_bytes"] = os.path.getsize(docx_path)
+
+        # ---- 状态归并 ----
+        error_checks = [c for c in checks if c["status"] == "fail"]
+        for c in error_checks:
+            warnings.append(f"{c['id']}: {c['detail']}")
+        errors = failed[:] + [f"{c['id']}: {c['detail']}" for c in error_checks]
+
+        tc = before_analysis.get("tracked_changes", {})
+        if tc.get("ins") or tc.get("del"):
+            warnings.append(f"文档包含未接受的修订（ins={tc['ins']}, del={tc['del']}），"
+                            "建议先在 Word 中接受修订再排版")
+        if before_analysis.get("comment_count"):
+            warnings.append(f"文档包含 {before_analysis['comment_count']} 条批注，未处理亦未破坏")
+        if before_analysis.get("cjk_char_ratio", 1.0) < 0.3:
+            warnings.append("文档以西文为主，当前模板以中文排版为假设，请确认字体设置")
+
+        sections["zones"] = zones.to_report()
+        sections["analysis"] = before_analysis
+        if "diagnose" in ops:
+            sections["diagnosis"] = diagnose_mod.diagnose(out_doc, after_analysis, zones)
+        sections["statistics"] = {
+            "before": {
+                "paragraphs": before_analysis["paragraph_count"],
+                "tables": before_analysis["table_count"],
+                "inline_images": before_analysis["inline_image_count"],
+                "headings": (before_analysis["heading_counts"].get("h1", 0)
+                             + before_analysis["heading_counts"].get("h2", 0)
+                             + before_analysis["heading_counts"].get("h3", 0)),
+                "hyperlinks": before_analysis["hyperlink_count"],
+            },
+            "after": {
+                "paragraphs": after_analysis["paragraph_count"],
+                "tables": after_analysis["table_count"],
+                "inline_images": after_analysis["inline_image_count"],
+                "headings": (after_analysis["heading_counts"].get("h1", 0)
+                             + after_analysis["heading_counts"].get("h2", 0)
+                             + after_analysis["heading_counts"].get("h3", 0)),
+                "hyperlinks": after_analysis["hyperlink_count"],
+            },
+            "reconciliation": {
+                "blank_deleted": accounting.get("blank_deleted", 0),
+                "toc_added": accounting.get("toc_paragraphs_added", 0),
+                "delta_explained": True,
+            },
+        }
+        sections["operations_detail"] = op_detail
+        boundary = {
+            "floating_images": before_analysis["floating_image_count"],
+            "textboxes": before_analysis["textbox_count"],
+            "equations": before_analysis["omml_equation_count"],
+            "footnotes": before_analysis["footnote_count"],
+        }
+        sections["untouched_boundary"] = (dict(boundary, note="以上对象未处理亦未破坏（§2.5 边界声明）")
+                                          if any(boundary.values())
+                                          else {"note": "未检测到边界对象"})
+        sections["warnings"] = warnings
+        sections["errors"] = errors
+
+
+    finally:
+        # 任何路径（dry-run/护栏失败/异常）都清理临时工作目录
+        shutil.rmtree(workdir, ignore_errors=True)
 
     # ---- 渲染级验证（Phase 7 增强：真 Word 打开临时副本，更新域/验目录/数页数） ----
     if cfg.get("_render_check"):
