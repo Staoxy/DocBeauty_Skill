@@ -97,9 +97,11 @@ def add_toc(doc, zones, effective: dict, options: dict, analysis: dict,
     from formatter import get_or_add_ppr
     ox.set_alignment(get_or_add_ppr(title_p._p), "center")
 
-    # ② TOC 域（三段 fldChar + 占位文本）
+    # ② TOC 域（三段 fldChar + 占位文本）；levels 可被模板/覆盖指定（§7 toc）
+    levels = (effective.get("toc") or {}).get("levels", "1-3")
+    instr = f' TOC \\o "{levels}" \\h \\z \\u '
     field_p = doc.paragraphs[anchor_idx + 1].insert_paragraph_before()
-    for run in ox.make_toc_field_runs(C.TOC_INSTR, C.TOC_PLACEHOLDER,
+    for run in ox.make_toc_field_runs(instr, C.TOC_PLACEHOLDER,
                                       west, east, body["size_pt"]):
         field_p._p.append(run)
 

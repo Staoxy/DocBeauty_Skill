@@ -127,6 +127,25 @@ def add_page_numbers(doc, effective: dict, options: dict, analysis: dict,
     return detail
 
 
+def apply_template_header(doc, text: str) -> dict:
+    """模板页眉应用（§12.3 preserve_if_present）：目标已有页眉文字则保留。"""
+    added = preserved = 0
+    for sec in doc.sections:
+        try:
+            existing = "".join(p.text for p in sec.header.paragraphs).strip()                 if sec.header is not None else ""
+        except Exception:
+            existing = ""
+        if existing:
+            preserved += 1
+            continue
+        sec.header.is_linked_to_previous = False
+        p = sec.header.paragraphs[0] if sec.header.paragraphs             else sec.header.add_paragraph()
+        p.text = text
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        added += 1
+    return {"headers_added": added, "headers_preserved": preserved}
+
+
 def add_header_text(doc, text: str) -> dict:
     """可选简单文字页眉（§11.3）：只给无页眉的节添加。"""
     added = 0

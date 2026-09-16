@@ -130,12 +130,51 @@ def process_document(input_path: str, cfg: dict) -> tuple:
         if zones.zones.get("toc_existing_manual"):
             before_analysis["existing_manual_toc"] = True
 
-        # ---- 4. 配置合并 ----
+        # ---- 4. 配置合并（V1.5：template/reference 模式走 Rule Resolver） ----
+        op_detail, executed, skipped, failed = [], [], [], []
+        warnings = []
+        accounting = {}
         if cfg["document_type"] == "auto":
             dtype = analyzer.detect_document_type(doc, before_analysis)
         else:
             dtype = {"value": cfg["document_type"], "confidence": 1.0, "evidence": []}
-        effective = build_effective(cfg, dtype["value"])
+
+        template_spec = reference_profile = None
+        if cfg["mode"] in ("template", "reference"):
+            import spec_builder
+            import template_analyzer
+            src_path = cfg["template"] if cfg["mode"] == "template" else cfg["reference"]
+            verr, vmsg = validate_input(src_path)
+            if verr:
+                raise ConfigError(C.CONFIG_INVALID,
+                                  f"{cfg['mode']} file invalid: {vmsg}")
+            from docx import Document as _TplDoc
+            analyzed = template_analyzer.analyze_template(_TplDoc(src_path))
+            if cfg["mode"] == "template":
+                template_spec = analyzed
+            else:
+                reference_profile = analyzed
+
+        from templates import get_template
+        from config import resolve_style
+        style_resolved = resolve_style(cfg, dtype["value"])
+        if cfg["mode"] in ("template", "reference"):
+            spec = spec_builder.build_formatting_spec(
+                cfg, get_template(style_resolved), template_spec=template_spec,
+                reference_profile=reference_profile,
+                target_analysis=before_analysis)
+            effective = spec["params"]
+            effective["_style_resolved"] = (
+                f"{cfg['mode']}:{template_spec['template_kind']}"
+                if template_spec else f"{cfg['mode']}:reference")
+            sections["template_spec"] = template_spec
+            sections["role_map"] = spec["role_map"]
+            sections["formatting_spec"] = {
+                "sources": spec["sources"], "policy": spec["policy"],
+                "unsupported": spec["unsupported"]}
+            warnings.extend(spec["warnings"])
+        else:
+            effective = build_effective(cfg, dtype["value"])
 
         ops = cfg["operations"] if isinstance(cfg["operations"], list) else C.AUTO_OPERATIONS
         sections["config"] = {
@@ -181,9 +220,9 @@ def process_document(input_path: str, cfg: dict) -> tuple:
             write_report(rep, report_path)
             return rep, C.EXIT_SUCCESS, None
 
-        # ---- 5-15. 执行操作 ----
-        accounting = {}
-        op_detail, executed, skipped, failed, warnings = [], [], [], [], []
+        # ---- 5-15. 执行操作（容器已在步骤 4 初始化） ----
+        if cfg["mode"] == "template" and "header_footer" not in ops:
+            ops = list(ops) + ["header_footer"]  # 仅模板模式套用页眉文字（§3 MODE 4 参考模式不复制）
 
         def run_op(op, fn):
             if op not in ops:
@@ -237,6 +276,21 @@ def process_document(input_path: str, cfg: dict) -> tuple:
             return d
 
         run_op("page_setup", lambda: layout.setup_page(doc, effective))
+
+        def _header_footer():
+            src_spec = template_spec if template_spec is not None else reference_profile
+            text = None
+            if src_spec:
+                text = ((src_spec.get("header_footer") or {}).get("header") or {}).get("text")
+            if not text:
+                return {"skipped": "spec has no header text"}
+            d = layout.apply_template_header(doc, text)
+            if d.get("headers_preserved"):
+                warnings.append(
+                    "header_footer: 目标已有页眉文字，按策略保留（preserve_if_present）")
+            return d
+        run_op("header_footer", _header_footer)
+
         run_op("detect_headings", lambda: {
             "headings_detected": len(zones.headings),
             "numbering_template": zones.numbering_template,
