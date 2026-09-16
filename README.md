@@ -25,8 +25,14 @@ python main.py --batch ./docs_dir -o output
 # 旧格式（Windows+Word 自动转换 .doc/.wps）
 python main.py "旧文档.doc" -o output
 
-# 渲染级验收（真 Word：更新域/验证目录/导出 PDF）
+# 渲染级验收（真 Word：更新域/验证目录/导出 PDF + 视觉指标/PNG）
 python main.py "论文.docx" -o output --render-check --pdf
+
+# V1.5 子命令：analyze / audit / plan / apply / verify / render
+python main.py analyze "文档.docx" -o output                          # 诊断（只读）
+python main.py audit  "论文.docx" --template "学校模板.docx"          # 模板差异清单
+python main.py plan   "论文.docx" --template "学校模板.docx" -o out   # formatting_spec.json
+python main.py apply  "论文.docx" --template "学校模板.docx" -o out   # 按模板排版
 ```
 
 退出码：`0` 成功 · `2` 部分成功（errors 已逐项记录）· `3` **内容护栏失败，不产出文件** · `1` 错误。
@@ -45,6 +51,8 @@ stdout 仅输出 report.json；日志走 stderr。
 | 目录 | 原生 TOC 域 + updateFields 自动刷新 + 已有域/手工目录去重 |
 | 质检 | Q01–Q16（对账、计数、标题层级、字体覆盖率、兼容红线）+ 可选真 Word 渲染验收 |
 | 旧格式 | .doc/.wps 经 Word COM 自动转 .docx（COM 不可用时明确报错并给出替代路径） |
+| **V1.5 模板引擎** | Template Analyzer（规范型/样例型双路径）、Role Mapping、Rule Resolver（P1用户>P2模板>P3参考>P5默认，来源逐项追溯）、Formatting Spec、四种输入模式（AUTO/PROMPT/TEMPLATE/REFERENCE）、Intent 受控词表 |
+| **V1.5 验证增强** | audit 差异清单（PASS/ATTENTION）、plan 计划输出、PDF→PNG 视觉指标（空白页/越界/孤行，pymupdf 可选）、渲染 PNG 供 Agent 目检 |
 
 ## 内容保护机制
 
@@ -57,7 +65,7 @@ stdout 仅输出 report.json；日志走 stderr。
 ## 开发
 
 ```bash
-python -m pytest tests/ -v        # 30 项测试矩阵（Phase 7 的 4 项需 Word COM，无则自动 skip）
+python -m pytest tests/ -v        # 66 项测试矩阵（COM/pymupdf 相关项无环境时自动 skip）
 ```
 
 测试覆盖：护栏不误报/拦截不落盘、防双重编号、两表合并保护、sectPr 保留、

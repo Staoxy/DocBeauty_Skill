@@ -133,7 +133,7 @@ def check_pdf(pdf_path: str, margins_cm: dict = None,
                            "detail": f"content_height_ratio={content_h:.2f}"})
 
         if margin_pt and x0 is not None and rect.width:
-            tol = 2.0
+            tol = 6.0  # 两端对齐正文贴边渲染 + 栅格舍入 ~2pt 属正常；真越界是几十 pt
             if x0 < margin_pt["left"] - tol or x1 > rect.width - margin_pt["right"] + tol:
                 flags.append("out_of_margin")
                 issues.append({"page": pno + 1, "severity": "error",

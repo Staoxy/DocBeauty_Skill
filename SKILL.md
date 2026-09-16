@@ -25,25 +25,49 @@ description: "Word 文档排版美化引擎：在【不修改正文内容】的�
 4. 标点/符号规范化默认关闭（会改文字）；要开启必须同时 `content_protection=false`。
 5. `status != "success"` 时，你必须把 report 里的 warnings/errors 如实转述给用户，**不得宣称成功**；`guard_failed` 必须明确告知"未产出文件"。
 
-## 标准工作流（推荐）
+## 标准工作流（V1.5 子命令；无子命令 = apply，与 V1 兼容）
 
 ```bash
-# 0. （可选）诊断：用户问"这份文档哪里乱"时，只报告不修改
-python <skill_dir>/main.py "输入.docx" -c diagnose.json -o output
-# diagnose.json: {"task": "diagnose"}  ->  报告 diagnosis.issues 按 high/medium/low/info 分级
+# 0. 诊断：用户问"这份文档哪里乱"时，只报告不修改
+python <skill_dir>/main.py analyze "输入.docx" -o output
 
-# 1. 先 dry-run：不修改任何东西，看计划
-python <skill_dir>/main.py "输入.docx" --dry-run -o output
+# 1. 四种模式（DESIGN_V15 §3）：
+#    AUTO    不加参数，自动检测
+#    PROMPT  Agent 把用户的话翻成 intent JSON 传给 -c 配置
+#    TEMPLATE 按 template.docx 排版（重点能力，支持规范型/样例型模板）
+#    REFERENCE 参考 reference.docx 的风格
+python <skill_dir>/main.py audit  "目标.docx" --template "模板.docx" -o output  # 差异清单（只读）
+python <skill_dir>/main.py plan   "目标.docx" --template "模板.docx" -o output  # 产出 formatting_spec.json，不执行
+python <skill_dir>/main.py apply  "目标.docx" --template "模板.docx" -o output  # 执行
+python <skill_dir>/main.py apply  "目标.docx" -c intent_config.json -o output   # PROMPT 模式经配置
 
-# 2. 向用户展示计划（模板选择、将提升的标题、将插入的目录/页码）
+# 2. 排版后复核
+python <skill_dir>/main.py verify "输出.docx" -o output                          # 独立质检
+python <skill_dir>/main.py render "输出.docx" --pdf -o output                    # Word 渲染验证 + 视觉指标 + PNG
 
-# 3. 正式运行（stdout 是唯一要解析的 JSON 报告）
-python <skill_dir>/main.py "输入.docx" -o output
+# 兼容写法（仍然有效）：
+python <skill_dir>/main.py "输入.docx" -o output            # = apply
+python <skill_dir>/main.py "输入.docx" --dry-run -o output  # = plan（AUTO 模式）
 # 退出码: 0 成功 | 2 部分成功 | 3 内容护栏失败(无文件) | 1 错误
-
-# 4. （Windows+Word 可选）渲染级验收：真 Word 更新域、验证目录条目/页码、导出 PDF
-python <skill_dir>/main.py "输入.docx" -o output --render-check --pdf
 ```
+
+### 模板模式推荐流程（audit → plan → apply → verify）
+
+1. `audit` 向用户展示 ✓/✗ 差异清单（哪些维度不符合模板）；
+2. `plan` 生成 formatting_spec.json（每个参数值带来源 P1用户/P2模板/P3参考/P5默认），向用户确认；
+3. `apply` 执行；护栏失败（exit 3）= 内容有变，**无输出文件**，必须如实转述；
+4. `verify`/`render` 复核；`render --pdf` 会附 render_pages/*.png，你应当目检这些页面图。
+
+### Intent（PROMPT 模式）
+
+你负责把用户自然语言翻译成受控 intent JSON（词表见 schemas/intent_schema.json）：
+
+```json
+{"mode": "prompt", "intent": {"style": "formal",
+  "preferences": {"line_density": "loose", "table_density": "comfortable"}}}
+```
+
+未知偏好会被降级为 warning；`intent.content_protection` 不能翻转门控（如需关闭保护必须用顶层字段并告知用户后果）。
 
 - stderr 是人类日志；**stdout 是 report.json**（Agent 解析入口）。
 - 输出：`output/<原名>_beautified.docx` + `output/<原名>_report.json`。
@@ -100,7 +124,11 @@ python <skill_dir>/main.py "输入.docx" -c config.json -o output
 | `content_guard` | 内容指纹、diff 明细、完整性计数（超链接/表格/图片/节数） |
 | `quality_checks` | Q01–Q16 质量检查结果 |
 | `untouched_boundary` | 浮动图片/文本框/公式/脚注：未处理亦未破坏 |
-| `render_check` | （--render-check）真 Word 渲染验证：页数、目录条目数与预览、页码是否渲染、PDF 路径 |
+| `render_check` | （--render-check）真 Word 渲染验证：页数、目录条目数与预览、页码是否渲染、PDF 路径、visual 视觉指标与 PNG |
+| `template_spec` / `role_map` | （模板模式）模板画像（kind=regular/sample、roles、页面、页眉页脚）与角色映射 |
+| `formatting_spec` | 参数来源追溯（sources: P1用户/P2模板/P3参考/P5默认）+ policy（编号保留/节结构/已有页眉页码策略） |
+| `intent_resolved` | （PROMPT 模式）偏好 → 参数的映射回显 |
+| `audit` | （audit 子命令）目标 vs 模板 ✓/✗ 差异清单，result=PASS/ATTENTION |
 | `diagnosis` | （task=diagnose）格式问题分级清单：FONT_CHAOS/INDENT_MISSING/NO_HEADINGS/TABLE_OVERFLOW/TRACKED_CHANGES 等 |
 
 ## 已知边界（如实告知用户）
