@@ -50,7 +50,8 @@ def _update_all_fields(doc):
         pass
 
 
-def render_check(docx_path: str, export_pdf: str = None) -> dict:
+def render_check(docx_path: str, export_pdf: str = None,
+                 margins_cm: dict = None) -> dict:
     """返回渲染验证结果。任何 COM 层故障 -> {"available": False, "reason": ...}。"""
     docx_path = os.path.abspath(docx_path)
     if not os.path.isfile(docx_path):
@@ -111,6 +112,14 @@ def render_check(docx_path: str, export_pdf: str = None) -> dict:
             os.makedirs(os.path.dirname(export_pdf) or ".", exist_ok=True)
             doc.ExportAsFixedFormat(export_pdf, _wdExportFormatPDF)
             result["pdf_exported"] = export_pdf
+            # 视觉指标（§14）：客观指标代码算，PNG 交 Agent 目检
+            try:
+                import visual_check
+                png_dir = os.path.join(os.path.dirname(export_pdf), "render_pages")
+                result["visual"] = visual_check.check_pdf(
+                    export_pdf, margins_cm=margins_cm, png_dir=png_dir)
+            except Exception as e:
+                result["visual"] = {"available": False, "reason": str(e)}
 
         return result
     except Exception as e:

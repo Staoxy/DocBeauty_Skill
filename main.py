@@ -489,7 +489,9 @@ def process_document(input_path: str, cfg: dict) -> tuple:
         import render_check
         pdf_path = os.path.join(os.path.dirname(docx_path),
                                 os.path.splitext(os.path.basename(docx_path))[0] + ".pdf")             if cfg.get("_pdf") else None
-        rc = render_check.render_check(docx_path, export_pdf=pdf_path)
+        rc = render_check.render_check(
+            docx_path, export_pdf=pdf_path,
+            margins_cm=(effective.get("page") or {}).get("margins_cm"))
         sections["render_check"] = rc
         if rc.get("available"):
             toc = rc.get("toc", {})
@@ -497,6 +499,13 @@ def process_document(input_path: str, cfg: dict) -> tuple:
                 warnings.append("render_check: TOC 域更新后无条目，请检查标题层级")
             if not rc.get("page_number_rendered"):
                 warnings.append("render_check: 页脚未渲染出页码")
+            visual = rc.get("visual") or {}
+            if visual.get("available") and visual.get("summary", {}).get("result") != "PASS":
+                s = visual["summary"]
+                warnings.append(
+                    f"render_check.visual: {s['result']} "
+                    f"({s['errors']} error / {s['warnings']} warning)——"
+                    "详见 render_check.visual.issues 与 render_pages/*.png")
         else:
             warnings.append(f"render_check 不可用（不影响结果）: {rc.get('reason', '')[:120]}")
 

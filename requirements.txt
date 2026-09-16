@@ -5,3 +5,6 @@ jsonschema>=4.0
 
 # 可选：Windows + Microsoft Word/WPS 时启用（.doc/.wps 转换、--render-check 渲染级验证）
 pywin32>=306 ; sys_platform == "win32"
+
+# 可选：视觉指标栅格化（--render-check/--pdf）
+pymupdf>=1.24
