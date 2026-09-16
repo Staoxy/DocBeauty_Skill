@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DocBeauty report",
+  "type": "object",
+  "required": ["status", "exit_code"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["success", "partial_success", "guard_failed", "dry_run", "error"]
+    },
+    "exit_code": {"type": "integer", "enum": [0, 1, 2, 3]},
+    "version": {"type": "object"},
+    "input": {"type": "object"},
+    "output": {"type": "object"},
+    "config": {"type": "object"},
+    "analysis": {"type": "object"},
+    "zones": {"type": "object"},
+    "statistics": {"type": "object"},
+    "operations_detail": {"type": "array"},
+    "content_guard": {"type": "object"},
+    "quality_checks": {"type": "array"},
+    "untouched_boundary": {"type": "object"},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "errors": {"type": "array", "items": {"type": "string"}},
+    "timing": {"type": "object"}
+  }
+}

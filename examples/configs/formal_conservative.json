@@ -1,0 +1,11 @@
+{
+  "task": "beautify",
+  "document_type": "report",
+  "style": "formal",
+  "content_protection": true,
+  "operations": ["page_setup", "format_headings", "normalize_font", "normalize_paragraph", "page_number"],
+  "options": {
+    "heading_promote": "off",
+    "delete_blank_paragraphs": false
+  }
+}

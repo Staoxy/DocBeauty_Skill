@@ -1,0 +1,24 @@
+{
+  "task": "beautify",
+  "document_type": "auto",
+  "style": "academic",
+  "content_protection": true,
+  "operations": "auto",
+  "overrides": {
+    "font": {"chinese": "宋体", "western": "Times New Roman", "size_pt": 12},
+    "paragraph": {"line_spacing": 1.5, "first_line_chars": 2},
+    "page": {"margins_cm": {"top": 2.5, "bottom": 2.5, "left": 3.0, "right": 2.5}},
+    "headings": {
+      "h1": {"font_cn": "黑体", "size_pt": 16, "align": "center"},
+      "h2": {"font_cn": "黑体", "size_pt": 14, "align": "left"},
+      "h3": {"font_cn": "黑体", "size_pt": 12, "align": "left"}
+    },
+    "tables": {"borders": "threeline"},
+    "page_number": {"align": "center", "size_pt": 9}
+  },
+  "options": {
+    "heading_promote": "high_confidence",
+    "table_repeat_header": true,
+    "toc_refresh_hint": true
+  }
+}

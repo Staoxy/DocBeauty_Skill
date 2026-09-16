@@ -1,0 +1,12 @@
+# 运行产物
+output/
+output2/
+.pytest_tmp/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 临时目录
+*.tmp
