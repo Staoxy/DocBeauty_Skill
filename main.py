@@ -139,10 +139,26 @@ def process_document(input_path: str, cfg: dict) -> tuple:
         else:
             dtype = {"value": cfg["document_type"], "confidence": 1.0, "evidence": []}
 
+        import spec_builder
+        import template_analyzer
         template_spec = reference_profile = None
+        intent_normalized = None
+        if cfg["mode"] == "prompt":
+            import intent as intent_mod
+            if cfg.get("intent") is None:
+                warnings.append("mode=prompt 未提供 intent，回退 auto 模式")
+                cfg = dict(cfg)
+                cfg["mode"] = "auto"
+            else:
+                intent_normalized, intent_warnings = intent_mod.validate_intent(cfg["intent"])
+                warnings.extend(intent_warnings)
+                if intent_normalized["style"]:
+                    cfg = dict(cfg)
+                    cfg["style"] = intent_normalized["style"]  # P1: 意图选择内置基线
+                if intent_normalized["document_type"] and cfg["document_type"] == "auto":
+                    dtype = {"value": intent_normalized["document_type"],
+                             "confidence": 1.0, "evidence": ["intent.document_type"]}
         if cfg["mode"] in ("template", "reference"):
-            import spec_builder
-            import template_analyzer
             src_path = cfg["template"] if cfg["mode"] == "template" else cfg["reference"]
             verr, vmsg = validate_input(src_path)
             if verr:
@@ -158,15 +174,29 @@ def process_document(input_path: str, cfg: dict) -> tuple:
         from templates import get_template
         from config import resolve_style
         style_resolved = resolve_style(cfg, dtype["value"])
-        if cfg["mode"] in ("template", "reference"):
+        if cfg["mode"] in ("template", "reference", "prompt"):
+            intent_params = None
+            intent_echo = {}
+            if cfg["mode"] == "prompt" and intent_normalized is not None:
+                import intent as intent_mod
+                intent_params, intent_echo = intent_mod.intent_to_params(
+                    intent_normalized, get_template(style_resolved))
+                sections["intent_resolved"] = intent_echo
+                if intent_normalized["content_protection"] is not None and                         intent_normalized["content_protection"] != cfg["content_protection"]:
+                    warnings.append(
+                        "intent.content_protection 不改变内容保护门控；请通过顶层字段设置")
             spec = spec_builder.build_formatting_spec(
                 cfg, get_template(style_resolved), template_spec=template_spec,
                 reference_profile=reference_profile,
-                target_analysis=before_analysis)
+                target_analysis=before_analysis, intent_params=intent_params)
             effective = spec["params"]
-            effective["_style_resolved"] = (
-                f"{cfg['mode']}:{template_spec['template_kind']}"
-                if template_spec else f"{cfg['mode']}:reference")
+            if template_spec is not None:
+                label = f"template:{template_spec['template_kind']}"
+            elif cfg["mode"] == "reference":
+                label = f"reference:{style_resolved}"
+            else:
+                label = style_resolved
+            effective["_style_resolved"] = label
             sections["template_spec"] = template_spec
             sections["role_map"] = spec["role_map"]
             sections["formatting_spec"] = {

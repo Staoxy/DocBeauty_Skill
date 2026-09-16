@@ -41,6 +41,18 @@ def _header_cells(row):
     return row.findall(qn("w:tc"))
 
 
+def _apply_cell_margins(tbl, dxa: int):
+    tblPr = _tbl_pr(tbl)
+    mar = ox.sub(tblPr, "w:tblCellMar")
+    for tag in ("w:top", "w:left", "w:bottom", "w:right"):
+        e = ox.get_child(mar, tag)
+        if e is None:
+            e = ox.make_elem(tag)
+            mar.append(e)
+        e.set(qn("w:w"), str(dxa))
+        e.set(qn("w:type"), "dxa")
+
+
 def format_tables(doc, effective: dict, options: dict, analysis: dict) -> dict:
     tpl = effective["tables"]
     borders_mode = options.get("table_borders", "auto")
@@ -80,6 +92,11 @@ def format_tables(doc, effective: dict, options: dict, analysis: dict) -> dict:
 
         # ---- 边框 ----
         ox.set_tbl_borders(tblPr, borders_mode)
+
+        # ---- 单元格边距（V1.5 intent.table_density 旋钮）----
+        cell_margin = (effective.get("tables") or {}).get("cell_margin_dxa")
+        if cell_margin:
+            _apply_cell_margins(tbl, int(cell_margin))
 
         # ---- 行为控制：cantSplit + 表头重复 ----
         rows = tbl.findall(qn("w:tr"))

@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "style": {
+      "type": "string",
+      "enum": [
+        "academic",
+        "formal",
+        "clean"
+      ]
+    },
+    "document_type": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "academic",
+        "experiment",
+        "report",
+        "meeting",
+        "generic"
+      ]
+    },
+    "content_protection": {
+      "type": "boolean"
+    },
+    "preferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "heading_emphasis": {
+          "type": "string",
+          "enum": [
+            "default",
+            "strong",
+            "subtle"
+          ]
+        },
+        "table_density": {
+          "type": "string",
+          "enum": [
+            "compact",
+            "default",
+            "comfortable"
+          ]
+        },
+        "body_consistency": {
+          "type": "boolean"
+        },
+        "caption_align": {
+          "type": "string",
+          "enum": [
+            "center",
+            "left"
+          ]
+        },
+        "line_density": {
+          "type": "string",
+          "enum": [
+            "compact",
+            "default",
+            "loose"
+          ]
+        }
+      }
+    },
+    "notes": {
+      "type": "string"
+    }
+  }
+}
