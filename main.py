@@ -248,6 +248,19 @@ def process_document(input_path: str, cfg: dict) -> tuple:
             }]
             rep = finalize("dry_run", C.EXIT_SUCCESS)
             write_report(rep, report_path)
+            if sections.get("formatting_spec"):
+                spec_out = {
+                    "mode": sections.get("formatting_spec", {}).get("mode", cfg["mode"]),
+                    "params": {k: v for k, v in effective.items()
+                               if not k.startswith("_")},
+                    "role_map": sections.get("role_map", {}),
+                    "sources": sections["formatting_spec"].get("sources", {}),
+                    "policy": sections["formatting_spec"].get("policy", {}),
+                    "unsupported": sections["formatting_spec"].get("unsupported", []),
+                }
+                with open(os.path.join(cfg["output_dir"], "formatting_spec.json"),
+                          "w", encoding="utf-8") as sf:
+                    json.dump(spec_out, sf, ensure_ascii=False, indent=2)
             return rep, C.EXIT_SUCCESS, None
 
         # ---- 5-15. 执行操作（容器已在步骤 4 初始化） ----
@@ -557,7 +570,7 @@ def run_one(input_path: str, args) -> tuple:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-SUBCOMMANDS = ("analyze", "apply", "render", "verify")
+SUBCOMMANDS = ("analyze", "apply", "audit", "plan", "render", "verify")
 
 
 def main(argv=None):
@@ -634,6 +647,65 @@ def _run_verify(args):
                           os.path.splitext(os.path.basename(args.target))[0], "verify")
 
 
+def _run_audit(args):
+    """audit = 目标 vs 模板差异清单（只读，DESIGN_V15 §13）。"""
+    code_err, msg = validate_input(args.target)
+    if code_err:
+        rep, code, _ = error_report(code_err, msg, args.target)
+        return _emit_and_save(rep, code, args.outdir,
+                              os.path.splitext(os.path.basename(args.target))[0], "audit")
+    terr, tmsg = validate_input(args.template)
+    if terr:
+        rep, code, _ = error_report(terr, f"template invalid: {tmsg}", args.target)
+        return _emit_and_save(rep, code, args.outdir,
+                              os.path.splitext(os.path.basename(args.target))[0], "audit")
+    from docx import Document
+    import audit as audit_mod
+    import template_analyzer
+    target_doc = Document(args.target)
+    template_spec = template_analyzer.analyze_template(Document(args.template))
+    result = audit_mod.run_audit(target_doc, template_spec)
+    sections = {
+        "input": {"file": os.path.basename(args.target),
+                  "path": os.path.abspath(args.target)},
+        "template": {"file": os.path.basename(args.template),
+                     "path": os.path.abspath(args.template)},
+        "template_spec": template_spec,
+        "audit": result,
+        "warnings": [], "errors": [],
+    }
+    rep = _build_report_safe("success", C.EXIT_SUCCESS, sections)
+    return _emit_and_save(rep, C.EXIT_SUCCESS, args.outdir,
+                          os.path.splitext(os.path.basename(args.target))[0], "audit")
+
+
+def _run_plan(args):
+    """plan = 生成排版计划与 formatting_spec.json，不执行（DESIGN_V15 §15）。"""
+    cfg = load_config(args.config)
+    cfg["_dry_run"] = True
+    cfg.setdefault("output_dir", args.outdir)
+    if getattr(args, "template", None):
+        cfg["mode"] = "template"
+        cfg["template"] = args.template
+    elif getattr(args, "reference", None):
+        cfg["mode"] = "reference"
+        cfg["reference"] = args.reference
+    if getattr(args, "intent", None):
+        cfg["intent"] = json.loads(args.intent)
+        cfg.setdefault("mode", "prompt")
+        if cfg["mode"] == "auto":
+            cfg["mode"] = "prompt"
+    code_err, msg = validate_input(args.target)
+    if code_err:
+        rep, code, _ = error_report(code_err, msg, args.target)
+        return _emit_and_save(rep, code, args.outdir,
+                              os.path.splitext(os.path.basename(args.target))[0], "plan")
+    rep, code, _ = process_document(args.target, cfg)
+    from report import emit_stdout
+    emit_stdout(rep)
+    return code
+
+
 def _run_render(args):
     """render = 渲染级验证（显式请求；COM 不可用时 exit 1）。"""
     import render_check
@@ -685,6 +757,16 @@ def _subcommand_main(argv):
     p_verify = sub.add_parser("verify", help="standalone quality checks on a docx")
     _add_target_args(p_verify)
 
+    p_audit = sub.add_parser("audit", help="target vs template diff report (read-only)")
+    _add_target_args(p_audit)
+    p_audit.add_argument("--template", required=True, help="template .docx")
+
+    p_plan = sub.add_parser("plan", help="build formatting plan without applying")
+    _add_target_args(p_plan)
+    p_plan.add_argument("--template", help="template .docx (mode=template)")
+    p_plan.add_argument("--reference", help="reference .docx (mode=reference)")
+    p_plan.add_argument("--intent", help="intent JSON string (mode=prompt)")
+
     p_render = sub.add_parser("render",
                               help="render via Word COM: update fields, verify TOC/pages")
     _add_target_args(p_render)
@@ -697,6 +779,10 @@ def _subcommand_main(argv):
         return _run_analyze(args)
     if args.command == "verify":
         return _run_verify(args)
+    if args.command == "audit":
+        return _run_audit(args)
+    if args.command == "plan":
+        return _run_plan(args)
     if args.command == "render":
         return _run_render(args)
     ap.error(f"unknown command: {args.command}")

@@ -40,6 +40,7 @@ def build_report(status: str, exit_code: int, sections: dict) -> dict:
         "role_map": sections.get("role_map", {}),
         "formatting_spec": sections.get("formatting_spec", {}),
         "intent_resolved": sections.get("intent_resolved", {}),
+        "audit": sections.get("audit", {}),
         "untouched_boundary": sections.get("untouched_boundary", {}),
         "warnings": sections.get("warnings", []),
         "errors": sections.get("errors", []),
