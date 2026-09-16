@@ -86,6 +86,19 @@ def para_has_drawing_or_field(p_el) -> bool:
 # ---------------------------------------------------------------------------
 # 编号模板自动检测（§8.2）
 # ---------------------------------------------------------------------------
+# 数学式判据：以数字开头、后面紧跟运算符，形如 "0.4x1+1.1x2+x3≤800"。
+# 这类段落会被 "^(\d+)[.、]" 误判成编号标题，必须排除。
+MATH_EXPR_RE = re.compile(r"^\d+(?:\.\d+)*(?=[^\s])[^=+*/<>≤≥\-]*(?:=|\+|/|≤|≥|->)")
+
+
+def looks_like_math(text: str) -> bool:
+    t = text.strip()
+    if not t:
+        return False
+    # 减号/连字符太常见（"3-1 概述"），只在两边是数字或字母时才算运算符
+    return bool(MATH_EXPR_RE.match(t)) or bool(re.match(r"^[\w.]+\s*-\s*[\w.]+", t))
+
+
 def _match_numeric_level(text: str):
     """numeric 模板按小数点数定级。"""
     t = text.strip()
@@ -122,6 +135,8 @@ def detect_numbering_template(paragraphs):
             text = para_text(p).strip()
             if not text or len(text) > 60:
                 continue
+            if looks_like_math(text):
+                continue  # 数学式不是编号标题，不参与模板评分
             lvl = _match_template_level(tpl_name, text)
             if lvl:
                 hits[i] = lvl
@@ -169,6 +184,8 @@ def score_heading_candidate(p_el, text, numbering_map_idx, body_mode_pt):
         return 0, True  # 目录标题进 §16 专用格式，不提升为 Heading（避免目录收录自身）
     if para_has_drawing_or_field(p_el):
         return 0, True
+    if looks_like_math(t):
+        return 0, True  # "0.4x1+1.1x2+x3≤800" 是约束条件，不是编号标题
     if t.endswith(C.SENTENCE_END_PUNCT):
         return -4, True
     if t.endswith(("：", ":")) and len(t) <= 12:

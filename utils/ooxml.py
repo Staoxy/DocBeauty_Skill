@@ -370,6 +370,16 @@ def find_style_by_name(styles_elem, name: str):
     return None
 
 
+def _unique_style_id(styles_elem, base: str) -> str:
+    """返回未被占用的 styleId（base / base2 / base3 ...）。"""
+    if find_style_by_sid(styles_elem, base) is None:
+        return base
+    n = 2
+    while find_style_by_sid(styles_elem, f"{base}{n}") is not None:
+        n += 1
+    return f"{base}{n}"
+
+
 def ensure_heading_style(doc, level: int):
     """确保 Heading N 样式存在，返回 styleId。
 
@@ -388,10 +398,17 @@ def ensure_heading_style(doc, level: int):
         return sid
     # 创建
     sid = f"Heading{level}"
-    for candidate in (sid, str(level)):
-        if find_style_by_sid(styles_elem, candidate) is not None:
-            sid = candidate
-            break
+    if find_style_by_sid(styles_elem, sid) is None:
+        # styleId 为纯数字（"1"/"2"/"3"）的旧文档/WPS 文档可复用，但**必须**
+        # 确认该 id 真的是同名标题样式。否则会撞上 WPS 里 styleId="1" 的
+        # 「列表段落1」之类，标题段落被套成列表样式（WPS 生成文档实测必现）。
+        alt = find_style_by_sid(styles_elem, str(level))
+        alt_name = alt.find(_qn("w:name")) if alt is not None else None
+        if alt_name is not None and \
+                (alt_name.get(_qn("w:val")) or "").strip().lower() == BUILTIN_HEADING_NAMES[level]:
+            sid = str(level)
+        else:
+            sid = _unique_style_id(styles_elem, sid)
     st = make_elem("w:style", {
         "w:type": "paragraph", "w:styleId": sid,
     })
