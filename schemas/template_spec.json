@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DocBeauty Template Specification (DESIGN_V15 §7)",
+  "type": "object",
+  "required": ["template_kind", "page", "roles"],
+  "properties": {
+    "template_kind": {"type": "string", "enum": ["regular", "sample"]},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "page": {
+      "type": "object",
+      "properties": {
+        "size": {"type": ["string", "null"]},
+        "margins_cm": {"type": ["object", "null"]}
+      }
+    },
+    "sections": {"type": "array"},
+    "header_footer": {"type": "object"},
+    "roles": {"type": "object"},
+    "roles_meta": {"type": "object"},
+    "tables": {"type": "object"},
+    "numbering": {"type": "object"},
+    "toc": {"type": "object"},
+    "unsupported": {"type": "array", "items": {"type": "string"}},
+    "analysis_summary": {"type": "object"}
+  }
+}

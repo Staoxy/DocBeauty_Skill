@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DocBeauty Formatting Spec (DESIGN_V15 §11)",
+  "type": "object",
+  "required": ["mode", "params"],
+  "properties": {
+    "mode": {"type": "string", "enum": ["auto", "prompt", "template", "reference"]},
+    "params": {"type": "object"},
+    "role_map": {"type": "object"},
+    "sources": {"type": "object"},
+    "policy": {"type": "object"},
+    "unsupported": {"type": "array", "items": {"type": "string"}},
+    "warnings": {"type": "array", "items": {"type": "string"}}
+  }
+}
