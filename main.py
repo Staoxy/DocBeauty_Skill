@@ -473,7 +473,152 @@ def run_one(input_path: str, args) -> tuple:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+SUBCOMMANDS = ("analyze", "apply", "render", "verify")
+
+
 def main(argv=None):
+    """入口：首参数是子命令则走子命令模式，否则按 V1 兼容模式（= apply）。"""
+    argv = list(sys.argv[1:]) if argv is None else list(argv)
+    if argv and argv[0] in SUBCOMMANDS:
+        return _subcommand_main(argv)
+    return _legacy_main(argv)
+
+
+def _emit_and_save(rep, code, outdir, stem, kind):
+    from report import write_report, emit_stdout
+    os.makedirs(outdir, exist_ok=True)
+    path = os.path.join(outdir, f"{stem}_{kind}_report.json")
+    write_report(rep, path)
+    emit_stdout(rep)
+    return code
+
+
+def _build_report_safe(status, code, sections):
+    from report import build_report
+    return build_report(status, code, sections)
+
+
+def _run_analyze(args):
+    """analyze = 只读诊断（diagnose 任务，DESIGN_V15 §13/§15）。"""
+    code_err, msg = validate_input(args.target)
+    if code_err:
+        rep, code, _ = error_report(code_err, msg, args.target)
+        return _emit_and_save(rep, code, args.outdir,
+                              os.path.splitext(os.path.basename(args.target))[0], "analyze")
+    cfg = load_config(args.config)
+    cfg["task"] = "diagnose"
+    cfg["output_dir"] = args.outdir
+    rep, code, _ = process_document(args.target, cfg)
+    from report import emit_stdout
+    emit_stdout(rep)  # diagnose 路径不经过 legacy main 的统一输出
+    return code
+
+
+def _run_verify(args):
+    """verify = 独立质检（无处理前状态，diff 类检查跳过）。"""
+    code_err, msg = validate_input(args.target)
+    if code_err:
+        rep, code, _ = error_report(code_err, msg, args.target)
+        return _emit_and_save(rep, code, args.outdir,
+                              os.path.splitext(os.path.basename(args.target))[0], "verify")
+    from docx import Document
+    import analyzer
+    import checker
+    doc = Document(args.target)
+    analysis = analyzer.analyze(doc)
+    checks = checker.run_checks(doc, {
+        "before_analysis": {}, "after_analysis": analysis,
+        "accounting": {}, "effective": {}, "requested": {},
+        "standalone": True,
+    })
+    checks.insert(0, {"id": "Q01", "status": "pass",
+                      "detail": "file opened with python-docx"})
+    fails = [c["id"] for c in checks if c["status"] == "fail"]
+    sections = {
+        "input": {"file": os.path.basename(args.target),
+                  "path": os.path.abspath(args.target)},
+        "analysis": analysis,
+        "quality_checks": checks,
+        "warnings": ["standalone verify: 无处理前状态，内容 diff 类检查（Q02–Q07）已跳过"],
+        "errors": [f"{qid}: {[c['detail'] for c in checks if c['id'] == qid][0]}"
+                   for qid in fails],
+    }
+    status = "partial_success" if fails else "success"
+    code = C.EXIT_PARTIAL if fails else C.EXIT_SUCCESS
+    rep = _build_report_safe(status, code, sections)
+    return _emit_and_save(rep, code, args.outdir,
+                          os.path.splitext(os.path.basename(args.target))[0], "verify")
+
+
+def _run_render(args):
+    """render = 渲染级验证（显式请求；COM 不可用时 exit 1）。"""
+    import render_check
+    pdf_path = None
+    if args.pdf:
+        stem = os.path.splitext(os.path.basename(args.target))[0]
+        os.makedirs(args.outdir, exist_ok=True)
+        pdf_path = os.path.join(args.outdir, f"{stem}.pdf")
+    rc = render_check.render_check(args.target, export_pdf=pdf_path)
+    sections = {
+        "input": {"file": os.path.basename(args.target),
+                  "path": os.path.abspath(args.target)},
+        "render_check": rc,
+        "warnings": [],
+        "errors": [],
+    }
+    if rc.get("available"):
+        status, code = "success", C.EXIT_SUCCESS
+    else:
+        status, code = "error", C.EXIT_ERROR
+        sections["errors"].append(f"RENDER_UNAVAILABLE: {rc.get('reason', '')}")
+    rep = _build_report_safe(status, code, sections)
+    return _emit_and_save(rep, code, args.outdir,
+                          os.path.splitext(os.path.basename(args.target))[0], "render")
+
+
+def _subcommand_main(argv):
+    ap = argparse.ArgumentParser(
+        prog="docbeauty",
+        description="Deterministic Word formatting engine (content-safe)")
+    sub = ap.add_subparsers(dest="command", required=True)
+
+    def _add_target_args(p):
+        p.add_argument("target", help="input .docx file")
+        p.add_argument("-c", "--config", help="config JSON file")
+        p.add_argument("-o", "--outdir", default="./output", help="output directory")
+        p.add_argument("--report", help="explicit report json path")
+
+    p_apply = sub.add_parser("apply", help="format a document (default mode)")
+    _add_target_args(p_apply)
+    p_apply.add_argument("--dry-run", action="store_true")
+    p_apply.add_argument("--batch", help="process every .docx in DIR")
+    p_apply.add_argument("--render-check", action="store_true")
+    p_apply.add_argument("--pdf", action="store_true")
+
+    p_analyze = sub.add_parser("analyze", help="diagnose format issues (read-only)")
+    _add_target_args(p_analyze)
+
+    p_verify = sub.add_parser("verify", help="standalone quality checks on a docx")
+    _add_target_args(p_verify)
+
+    p_render = sub.add_parser("render",
+                              help="render via Word COM: update fields, verify TOC/pages")
+    _add_target_args(p_render)
+    p_render.add_argument("--pdf", action="store_true", help="export rendered PDF")
+
+    args = ap.parse_args(argv)
+    if args.command == "apply":
+        return _legacy_main(argv[1:])  # 去掉子命令词，参数与兼容模式一致
+    if args.command == "analyze":
+        return _run_analyze(args)
+    if args.command == "verify":
+        return _run_verify(args)
+    if args.command == "render":
+        return _run_render(args)
+    ap.error(f"unknown command: {args.command}")
+
+
+def _legacy_main(argv=None):
     ap = argparse.ArgumentParser(
         prog="docbeauty",
         description="Deterministic Word formatting engine (content-safe)")

@@ -4,60 +4,189 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "task": {"type": "string", "enum": ["beautify", "diagnose"]},
-    "input_file": {"type": "string", "minLength": 1},
-    "output_dir": {"type": "string"},
+    "task": {
+      "type": "string",
+      "enum": [
+        "beautify",
+        "diagnose"
+      ]
+    },
+    "input_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "output_dir": {
+      "type": "string"
+    },
     "document_type": {
       "type": "string",
-      "enum": ["auto", "academic", "experiment", "report", "meeting", "generic"]
+      "enum": [
+        "auto",
+        "academic",
+        "experiment",
+        "report",
+        "meeting",
+        "generic"
+      ]
     },
-    "style": {"type": "string", "enum": ["auto", "academic", "formal", "clean"]},
-    "content_protection": {"type": "boolean"},
+    "style": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "academic",
+        "formal",
+        "clean"
+      ]
+    },
+    "content_protection": {
+      "type": "boolean"
+    },
     "operations": {
       "oneOf": [
-        {"type": "string", "enum": ["auto"]},
+        {
+          "type": "string",
+          "enum": [
+            "auto"
+          ]
+        },
         {
           "type": "array",
-          "items": {"type": "string", "minLength": 1},
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
           "minItems": 1
         }
       ]
     },
-    "format_file": {"type": ["string", "null"]},
-    "overrides": {"$ref": "#/definitions/overrides"},
-    "options": {"$ref": "#/definitions/options"}
+    "format_file": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "overrides": {
+      "$ref": "#/definitions/overrides"
+    },
+    "options": {
+      "$ref": "#/definitions/options"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "prompt",
+        "template",
+        "reference"
+      ],
+      "description": "input mode (DESIGN_V15 §3)"
+    },
+    "template": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "template.docx path (mode=template)"
+    },
+    "reference": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "reference.docx path (mode=reference)"
+    },
+    "intent": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "structured intent produced by the Agent (mode=prompt)"
+    }
   },
   "definitions": {
     "overrides": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "font": {"type": "object"},
-        "paragraph": {"type": "object"},
-        "page": {"type": "object"},
-        "headings": {"type": "object"},
-        "captions": {"type": "object"},
-        "tables": {"type": "object"},
-        "page_number": {"type": "object"},
-        "toc": {"type": "object"}
+        "font": {
+          "type": "object"
+        },
+        "paragraph": {
+          "type": "object"
+        },
+        "page": {
+          "type": "object"
+        },
+        "headings": {
+          "type": "object"
+        },
+        "captions": {
+          "type": "object"
+        },
+        "tables": {
+          "type": "object"
+        },
+        "page_number": {
+          "type": "object"
+        },
+        "toc": {
+          "type": "object"
+        }
       }
     },
     "options": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "delete_blank_paragraphs": {"type": "boolean"},
-        "heading_promote": {"type": "string", "enum": ["off", "high_confidence", "all"]},
-        "strip_style_numbering": {"type": "boolean"},
-        "keep_inline_emphasis": {"type": "boolean"},
-        "page_number_skip_existing": {"type": "boolean"},
-        "table_repeat_header": {"type": "boolean"},
-        "table_borders": {"type": "string", "enum": ["auto", "grid", "threeline", "none"]},
-        "image_max_width_percent": {"type": "number", "minimum": 10, "maximum": 100},
-        "toc_replace_manual": {"type": "boolean"},
-        "toc_refresh_hint": {"type": "boolean"},
-        "toc_page_break": {"type": "boolean"},
-        "punctuation_normalize": {"type": "boolean"}
+        "delete_blank_paragraphs": {
+          "type": "boolean"
+        },
+        "heading_promote": {
+          "type": "string",
+          "enum": [
+            "off",
+            "high_confidence",
+            "all"
+          ]
+        },
+        "strip_style_numbering": {
+          "type": "boolean"
+        },
+        "keep_inline_emphasis": {
+          "type": "boolean"
+        },
+        "page_number_skip_existing": {
+          "type": "boolean"
+        },
+        "table_repeat_header": {
+          "type": "boolean"
+        },
+        "table_borders": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "grid",
+            "threeline",
+            "none"
+          ]
+        },
+        "image_max_width_percent": {
+          "type": "number",
+          "minimum": 10,
+          "maximum": 100
+        },
+        "toc_replace_manual": {
+          "type": "boolean"
+        },
+        "toc_refresh_hint": {
+          "type": "boolean"
+        },
+        "toc_page_break": {
+          "type": "boolean"
+        },
+        "punctuation_normalize": {
+          "type": "boolean"
+        }
       }
     }
   }

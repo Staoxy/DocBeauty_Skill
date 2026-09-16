@@ -87,6 +87,15 @@ def _blank_clusters(doc) -> int:
     return worst
 
 
+def _usable_width_standalone(doc) -> int:
+    """从文档节设置直接取可用宽度（dxa），不依赖 effective 参数。"""
+    try:
+        sec = doc.sections[0]
+        return int((sec.page_width - sec.left_margin - sec.right_margin) / 635)
+    except Exception:
+        return 0
+
+
 def run_checks(doc, ctx: dict) -> list:
     """返回 [{id, status: pass|warn|fail|info|skip, detail}]。"""
     results = []
@@ -99,30 +108,37 @@ def run_checks(doc, ctx: dict) -> list:
     acc = ctx.get("accounting", {})
     req = ctx.get("requested", {})
 
-    # Q03/Q04/Q05/Q06/Q07 计数类
-    for qid, key, level, cmp in (
-        ("Q03", "table_count", "error", "eq"),
-        ("Q04", "inline_image_count", "error", "eq"),
-        ("Q05", "floating_image_count", "error", "eq"),
-        ("Q06", "hyperlink_count", "warn", "ge"),
-    ):
-        b, a = ba.get(key, 0), aa.get(key, 0)
-        ok = (a == b) if cmp == "eq" else (a >= b)
-        add(qid, ok, f"{key}: {b} -> {a}", level)
+    standalone = ctx.get("standalone")
+    if standalone:
+        # 独立校验：无处理前状态，diff 类检查跳过
+        for qid in ("Q02", "Q03", "Q04", "Q05", "Q06", "Q07"):
+            results.append({"id": qid, "status": "skip",
+                            "detail": "standalone verify: no before-state"})
+    else:
+        # Q03/Q04/Q05/Q06/Q07 计数类
+        for qid, key, level, cmp in (
+            ("Q03", "table_count", "error", "eq"),
+            ("Q04", "inline_image_count", "error", "eq"),
+            ("Q05", "floating_image_count", "error", "eq"),
+            ("Q06", "hyperlink_count", "warn", "ge"),
+        ):
+            b, a = ba.get(key, 0), aa.get(key, 0)
+            ok = (a == b) if cmp == "eq" else (a >= b)
+            add(qid, ok, f"{key}: {b} -> {a}", level)
 
-    # Q07 域/书签不减（用 guard integrity 更可靠，此处独立校验）
-    b_fields = ba.get("field_count", 0)
-    a_fields = _count_fields(doc)
-    add("Q07", a_fields >= b_fields,
-        f"fields: {b_fields} -> {a_fields}", "warn")
+        # Q07 域/书签不减（用 guard integrity 更可靠，此处独立校验）
+        b_fields = ba.get("field_count", 0)
+        a_fields = _count_fields(doc)
+        add("Q07", a_fields >= b_fields,
+            f"fields: {b_fields} -> {a_fields}", "warn")
 
-    # Q02 段落对账（§18 公式）
-    b_paras = ba.get("paragraph_count", 0)
-    a_paras = aa.get("paragraph_count", 0)
-    expected = b_paras - acc.get("blank_deleted", 0) + acc.get("toc_paragraphs_added", 0) \
-        - acc.get("manual_toc_removed", 0)
-    add("Q02", a_paras == expected,
-        f"paragraphs: {b_paras} -> {a_paras} (expected {expected})", "error")
+        # Q02 段落对账（§18 公式）
+        b_paras = ba.get("paragraph_count", 0)
+        a_paras = aa.get("paragraph_count", 0)
+        expected = b_paras - acc.get("blank_deleted", 0) + acc.get("toc_paragraphs_added", 0) \
+            - acc.get("manual_toc_removed", 0)
+        add("Q02", a_paras == expected,
+            f"paragraphs: {b_paras} -> {a_paras} (expected {expected})", "error")
 
     # Q08 标题层级
     levels = _heading_levels(doc)
@@ -136,8 +152,9 @@ def run_checks(doc, ctx: dict) -> list:
         add("Q08", not req.get("format_headings"),
             "no headings detected/applied", "warn")
 
-    # Q09 表格宽度（逐表 vs 可用宽度）
-    usable = usable_width_emu(doc, ctx.get("effective", {})) // _EMU_PER_TWIP
+    # Q09 表格宽度（逐表 vs 可用宽度；无 effective 时从文档节直接取）
+    usable = _usable_width_standalone(doc) if ctx.get("standalone") or not ctx.get("effective") \
+        else usable_width_emu(doc, ctx["effective"]) // _EMU_PER_TWIP
     overflow = []
     for i, tbl in enumerate(_top_level_tables(doc)):
         total = sum(_grid_cols(tbl))

@@ -46,6 +46,15 @@ def load_config(source) -> dict:
     cfg.setdefault("format_file", None)
     cfg.setdefault("overrides", {})
     cfg.setdefault("options", {})
+    cfg.setdefault("mode", "auto")
+    cfg.setdefault("template", None)
+    cfg.setdefault("reference", None)
+    cfg.setdefault("intent", None)
+    # 模式校验（DESIGN_V15 §3）
+    if cfg["mode"] == "template" and not cfg["template"]:
+        raise ConfigError("CONFIG_INVALID", "mode=template requires 'template' path")
+    if cfg["mode"] == "reference" and not cfg["reference"]:
+        raise ConfigError("CONFIG_INVALID", "mode=reference requires 'reference' path")
     # 校验
     try:
         jsonschema.validate(cfg, load_schema())
